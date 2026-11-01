@@ -1,0 +1,22 @@
+name: Build Windows exe
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller pytest
+      - run: pytest
+      - run: pyinstaller --noconsole --onefile --name PDFToolkit main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFToolkit-windows
+          path: dist/PDFToolkit.exe
