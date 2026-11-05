@@ -1,4 +1,6 @@
-from pdftool.gui import main
+import sys
+
+from pdftool.app import run
 
 if __name__ == "__main__":
-    main()
+    sys.exit(run())

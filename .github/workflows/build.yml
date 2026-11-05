@@ -1,22 +1,50 @@
-name: Build Windows exe
+name: Test and build Windows exe
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SCREENSHOT_DIR: screenshots
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: ignore
+
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pyinstaller pytest
-      - run: pytest
+          cache: pip
+      - run: pip install -r requirements.txt pyinstaller
       - run: pyinstaller --noconsole --onefile --name PDFToolkit main.py
       - uses: actions/upload-artifact@v4
         with:
           name: PDFToolkit-windows
           path: dist/PDFToolkit.exe
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/PDFToolkit.exe
