@@ -135,3 +135,33 @@ def test_full_flow(app, tmp_path):
     shot(win, "06_start_dark")
     win.toggle_theme()
     win.close()
+
+
+def test_arabic_ui(app, tmp_path):
+    """Arabic UI (right-to-left layout) with an Arabic text box on the page."""
+    from PySide6.QtCore import Qt
+    from pdftool.document import PdfDoc
+
+    set_language("ar")
+    app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    try:
+        s = QSettings(str(tmp_path / "ar.ini"), QSettings.Format.IniFormat)
+        win = MainWindow(app, s)
+        win.resize(1280, 820)
+        win.show()
+        pump()
+        shot(win, "07_start_arabic")
+        path = make_pdf(tmp_path / "ar.pdf", pages=2)
+        pdf = PdfDoc.open(path)
+        pdf.add_text(0, (60, 300, 520, 360), "مرحبًا بكم في أداة PDF — هذا نص عربي للتجربة", 22, (0.1, 0.2, 0.6))
+        pdf.save(str(tmp_path / "ar2.pdf"))
+        pdf.close()
+        win.open_path(str(tmp_path / "ar2.pdf"))
+        pump(20)
+        win._apply_tool("highlight")
+        shot(win, "08_open_arabic")
+        assert win.close_tab(0) is True
+        win.close()
+    finally:
+        set_language("en")
+        app.setLayoutDirection(Qt.LayoutDirection.LeftToRight)

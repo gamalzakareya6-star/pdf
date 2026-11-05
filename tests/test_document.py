@@ -4,8 +4,8 @@ import pytest
 
 fitz = pytest.importorskip("pymupdf")
 
-from pdftool.document import (PasswordRequired, PdfDoc, PdfError, merge_files,  # noqa: E402
-                              parse_ranges)
+from pdftool.document import (PasswordRequired, PdfDoc, PdfError, available_fonts,  # noqa: E402
+                              merge_files, parse_ranges)
 
 
 def make_pdf(path, pages=3, rotate=0):
@@ -91,6 +91,9 @@ def test_add_and_replace_text(tmp_path):
     pdf.add_text(0, (50, 200, 300, 240), "Added text", 14, (0, 0, 0))
     assert "Added" in "".join(w[4] for w in pdf.words(0))
     pdf.add_text(0, (50, 250, 300, 290), "نص عربي للاختبار", 14, (0, 0, 0))  # must not raise
+    if any(n in ("Arial", "Tahoma", "DejaVu Sans") for n, p in available_fonts() if p):
+        text = pdf.doc.load_page(0).get_text()
+        assert any("؀" <= ch <= "ۿ" or "ﭐ" <= ch <= "﻿" for ch in text), text
     info = pdf.text_line_at(0, 60, 95)
     assert info and info["text"].startswith("Hello")
     pdf.replace_text(0, info["rect"], "Goodbye there", info["size"], info["color"])

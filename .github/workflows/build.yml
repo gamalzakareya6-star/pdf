@@ -14,6 +14,7 @@ jobs:
       contents: write
     env:
       QT_QPA_PLATFORM: offscreen
+      QT_QPA_FONTDIR: C:\Windows\Fonts
       SCREENSHOT_DIR: screenshots
     steps:
       - uses: actions/checkout@v4

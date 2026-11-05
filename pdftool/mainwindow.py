@@ -8,7 +8,7 @@ from PySide6.QtGui import (QAction, QActionGroup, QColor, QIcon, QKeySequence, Q
                            QShortcut)
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressDialog,
-                               QPushButton, QSizePolicy, QSpinBox, QSplitter, QStackedWidget, QTabWidget, QToolBar,
+                               QPushButton, QSizePolicy, QSpinBox, QSplitter, QStackedWidget, QTabBar, QTabWidget, QToolBar,
                                QToolButton, QVBoxLayout, QWidget)
 
 from . import __version__
@@ -78,9 +78,13 @@ class DocTab(QWidget):
         self.side = QTabWidget()
         self.side.setDocumentMode(True)
         self.side.tabBar().setObjectName("side")
-        self.side.addTab(self.thumbs, tr("Thumbnails"))
-        self.side.addTab(self.outline, tr("Outline"))
-        self.side.addTab(self.annots, tr("Annotations"))
+        for i, (w, name) in enumerate(((self.thumbs, "Thumbnails"), (self.outline, "Outline"),
+                                       (self.annots, "Annotations"))):
+            self.side.addTab(w, "")
+            self.side.setTabToolTip(i, tr(name))
+        self.side.tabBar().setUsesScrollButtons(False)
+        self.side.tabBar().setExpanding(True)
+        self.side.tabBar().setDrawBase(False)
         self.side.setMinimumWidth(190)
         self.side.setMaximumWidth(360)
 
@@ -253,7 +257,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.tabs.setTabsClosable(True)
+        self.tabs.setTabsClosable(False)  # we draw our own, theme-aware close buttons
         self.tabs.setMovable(True)
         self.tabs.tabBar().setObjectName("docs")
         self.tabs.tabBar().setExpanding(False)
@@ -556,9 +560,12 @@ class MainWindow(QMainWindow):
             self.A[key].setIcon(self.mk(icon))
         for b, icon in self.start_buttons:
             b.setIcon(self.mk(icon))
-        for tab in self._tabs():
+        for i, tab in enumerate(self._tabs()):
             tab.apply_icons(self.mk)
             tab.set_colors(c["canvas"], c["accent"])
+            b = self.tabs.tabBar().tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if isinstance(b, QToolButton):
+                b.setIcon(self.mk("close"))
         for w in (self.tools_tb, self.tb):
             w.style().unpolish(w)
             w.style().polish(w)
@@ -600,6 +607,12 @@ class MainWindow(QMainWindow):
             tab.side.setCurrentIndex(0)
         idx = self.tabs.addTab(tab, pdf.title)
         self.tabs.setTabToolTip(idx, pdf.path or "")
+        btn = QToolButton()
+        btn.setAutoRaise(True)
+        btn.setIcon(self.mk("close"))
+        btn.setToolTip(tr("Close tab"))
+        btn.clicked.connect(lambda _=False, t=tab: self.close_tab(self.tabs.indexOf(t)))
+        self.tabs.tabBar().setTabButton(idx, QTabBar.ButtonPosition.RightSide, btn)
         self.tabs.setCurrentIndex(idx)
         QTimer.singleShot(0, lambda: tab.view.set_fit("width"))
         self._sync()
@@ -1057,6 +1070,7 @@ class MainWindow(QMainWindow):
         tab = self.cur()
         has = tab is not None
         self.stack.setCurrentIndex(1 if has else 0)
+        self.tools_tb.setVisible(has)
         for k, a in self.A.items():
             if k in ("open", "new", "merge", "quit", "theme", "fullscreen", "about", "lang_en", "lang_ar") or k.startswith("swatch"):
                 continue
