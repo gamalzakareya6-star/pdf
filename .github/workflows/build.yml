@@ -61,8 +61,17 @@ jobs:
         with:
           name: PDFToolkit-windows
           path: dist/PDFToolkit.exe
-      - name: Attach to release
+      - name: Attach to release (version tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          files: dist/PDFToolkit.exe
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: PDF Toolkit - latest build
+          body: Windows build of the newest commit on main (PDFToolkit.exe).
+          target_commitish: ${{ github.sha }}
           files: dist/PDFToolkit.exe
