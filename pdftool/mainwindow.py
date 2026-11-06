@@ -202,12 +202,15 @@ class DocTab(QWidget):
         self.search_edit.selectAll()
 
     def hide_search(self):
+        self._timer.stop()
         self.search_bar.hide()
         self._hits, self._flat, self._idx = {}, [], -1
         self.view.set_search({}, None)
         self.view.setFocus()
 
     def run_search(self):
+        if not self.search_bar.isVisible():
+            return
         q = self.search_edit.text().strip()
         self._hits, self._flat = {}, []
         if q:

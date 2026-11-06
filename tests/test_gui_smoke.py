@@ -165,3 +165,88 @@ def test_arabic_ui(app, tmp_path):
     finally:
         set_language("en")
         app.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+
+
+def _vp(view, page, x, y):
+    from PySide6.QtCore import QPoint
+    r = view._page_view_rect(page)
+    return QPoint(int(r.x() + x * view.zoom), int(r.y() + y * view.zoom))
+
+
+def _drag(view, a, b, steps=8):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    vp = view.viewport()
+    QTest.mousePress(vp, Qt.MouseButton.LeftButton, pos=a)
+    for i in range(1, steps + 1):
+        QTest.mouseMove(vp, QPoint(a.x() + (b.x() - a.x()) * i // steps, a.y() + (b.y() - a.y()) * i // steps))
+    QTest.mouseRelease(vp, Qt.MouseButton.LeftButton, pos=b)
+    pump()
+
+
+def test_tools_with_real_mouse_events(app, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    set_language("en")
+    s = QSettings(str(tmp_path / "t.ini"), QSettings.Format.IniFormat)
+    win = MainWindow(app, s)
+    win.resize(1280, 900)
+    win.show()
+    win.open_path(make_pdf(tmp_path / "t.pdf", pages=2))
+    pump(20)
+    tab = win.cur()
+    view, pdf = tab.view, tab.pdf
+    view.go_to_page(0)
+    view.verticalScrollBar().setValue(0)
+    pump()
+
+    def kinds():
+        return sorted(a["type"] for a in pdf.annots(0))
+
+    # free drawing
+    win._apply_tool("draw")
+    _drag(view, _vp(view, 0, 300, 600), _vp(view, 0, 400, 650))
+    assert "Ink" in kinds(), kinds()
+
+    # rectangle
+    win._apply_tool("rect")
+    _drag(view, _vp(view, 0, 100, 650), _vp(view, 0, 220, 720))
+    assert "Square" in kinds(), kinds()
+
+    # highlight by dragging over the first words
+    win._apply_tool("highlight")
+    w = pdf.words(0)
+    a = w[0]
+    b = w[2]
+    _drag(view, _vp(view, 0, a[0] + 1, (a[1] + a[3]) / 2), _vp(view, 0, b[2] - 1, (b[1] + b[3]) / 2))
+    assert "Highlight" in kinds(), kinds()
+
+    # text box: drag, type, commit
+    win._apply_tool("text")
+    _drag(view, _vp(view, 0, 60, 740), _vp(view, 0, 300, 790))
+    assert view._editor is not None
+    view._editor.setPlainText("Typed with the text tool")
+    view._commit_editor()
+    pump()
+    assert "Typed" in [x[4] for x in pdf.words(0)]
+
+    # select the rectangle and delete it with the keyboard
+    win._apply_tool("select")
+    before = kinds().count("Square")
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=_vp(view, 0, 160, 685))
+    pump()
+    assert view._sel_annot is not None
+    QTest.keyClick(view, Qt.Key.Key_Delete)
+    pump()
+    assert kinds().count("Square") == before - 1
+
+    # undo everything that was drawn, one step at a time
+    n = 0
+    while pdf.can_undo:
+        pdf.undo()
+        n += 1
+    assert n >= 4 and pdf.annots(0) == []
+    shot(win, "09_tools")
+    pdf.modified = False
+    win.close()
