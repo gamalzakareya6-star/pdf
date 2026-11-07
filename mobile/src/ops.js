@@ -123,6 +123,14 @@ export async function encryptPdf(bytes, pw) {
 }
 
 export async function decryptPdf(bytes, pw) {
-  const d = await PDFDocument.load(bytes, { password: pw, updateMetadata: false });
-  return save(d);
+  // Re-saving a decrypted document may re-encrypt it, so copy the pages into a fresh (plain) document.
+  const src = await PDFDocument.load(bytes, { password: pw, updateMetadata: false });
+  const nd = await PDFDocument.create();
+  const pages = await nd.copyPages(src, src.getPageIndices());
+  pages.forEach((p) => nd.addPage(p));
+  try {
+    nd.setTitle(src.getTitle() || ''); nd.setAuthor(src.getAuthor() || '');
+    nd.setSubject(src.getSubject() || ''); nd.setKeywords((src.getKeywords() || '').split(/[,،]/).map((x) => x.trim()).filter(Boolean));
+  } catch (e) { /* metadata is optional */ }
+  return save(nd);
 }
