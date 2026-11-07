@@ -59,3 +59,10 @@ tests/                   # اختبارات المحرك + اختبار شامل
 ## الترخيص
 
 MIT — لاحظ أن PyMuPDF مرخصة بـ AGPL، فمشاركة البرنامج المبني عليها تتطلب الالتزام بشروط هذا الترخيص.
+
+## Android (phone) version
+
+An Android app with the same editing features lives in [`mobile/`](mobile) (Capacitor + pdf.js + pdf-lib).
+The latest signed APK is attached to the [`latest` release](https://github.com/gamalzakareya6-star/pdf/releases/tag/latest) as `PDFToolkit.apk`.
+Install it by allowing "install unknown apps" for your browser/file manager (the APK is self-signed, so Play Protect may warn).
+Saving opens the Android share sheet (choose "Save to Files/Drive").
