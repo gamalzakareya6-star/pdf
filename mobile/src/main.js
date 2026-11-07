@@ -6,6 +6,7 @@ import { Share } from '@capacitor/share';
 import { App as CapApp } from '@capacitor/app';
 import { t, setLang, getLang } from './i18n.js';
 import { icon } from './icons.js';
+import { drawEdit, layoutText } from './draw.js';
 import { h, $, iconBtn, toast, withBusy, openSheet, askText, askConfirm, actionSheet, goBack, backStack } from './ui.js';
 import {
   S, subscribe, loadNew, commitBytes, undo, redo, canUndo, canRedo, hasEdits, markSaved, setPassword, removeEdit, replaceEdit,
@@ -287,7 +288,8 @@ function buildTop() {
 const TOOL_LIST = () => [
   ['hand', 'hand', t('Pan')], ['select', 'select', t('Select')], ['edit', 'edittext', t('Edit text')],
   ['hl', 'highlight', t('Highlight')], ['ul', 'underline', t('Underline')], ['st', 'strike', t('Strikeout')],
-  ['ink', 'draw', t('Draw')], ['text', 'text', t('Text')], ['note', 'note', t('Note')],
+  ['ink', 'draw', t('Pen')], ['erase', 'eraser', t('Eraser')], ['text', 'text', t('Text')], ['note', 'note', t('Note')],
+  ['stamp', 'stamp', t('Stamp')],
   ['rect', 'rect', t('Rectangle')], ['ellipse', 'ellipse', t('Ellipse')], ['line', 'line', t('Line')], ['arrow', 'arrow', t('Arrow')],
   ['img', 'image', t('Image')], ['sig', 'signature', t('Signature')], ['redact', 'redact', t('Redact')],
 ];
@@ -310,25 +312,87 @@ function markTool() {
   });
 }
 
-const COLOR_TOOLS = new Set(['hl', 'ul', 'st', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note']);
-const WIDTH_TOOLS = new Set(['ink', 'rect', 'ellipse', 'line', 'arrow']);
+const COLOR_TOOLS = new Set(['hl', 'ul', 'st', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note', 'stamp']);
+const SHAPE_TOOLS = new Set(['rect', 'ellipse', 'line', 'arrow']);
+const PEN_NAMES = () => ({ ballpoint: t('Ballpoint'), fine: t('Fine liner'), fountain: t('Fountain'), brush: t('Brush'), pencil: t('Pencil'), marker: t('Marker'), highlighter: t('Highlighter') });
 
-function swatches(current, onPick) {
+const row = (...kids) => h('div', { class: 'orow' }, ...kids);
+
+function swatches(current, onPick, tool) {
   const wrap = h('div', { class: 'swatches' });
   for (const c of COLORS) {
     wrap.append(h('button', { class: 'sw' + (c.toLowerCase() === String(current).toLowerCase() ? ' on' : ''), type: 'button', style: `--c:${c}`, 'aria-label': c, onClick: () => onPick(c) }));
   }
+  const custom = store.get('customColor');
+  if (custom && !COLORS.includes(custom)) wrap.append(h('button', { class: 'sw' + (custom.toLowerCase() === String(current).toLowerCase() ? ' on' : ''), type: 'button', style: `--c:${custom}`, onClick: () => onPick(custom) }));
+  const inp = h('input', { type: 'color', value: /^#[0-9a-f]{6}$/i.test(current) ? current : '#4f6bed', 'aria-label': t('Custom color') });
+  inp.addEventListener('change', () => { store.set('customColor', inp.value); onPick(inp.value); });
+  wrap.append(h('label', { class: 'sw custom' }, inp));
   return wrap;
 }
 
-function slider(label, min, max, value, onInput) {
+// onInput: live (tool settings); onChange: when released (used for selected edits so one undo step = one change)
+function slider(label, min, max, value, onInput, onChange, step = 1) {
   const out = h('span', { class: 'sl-v' }, String(value));
-  const inp = h('input', { type: 'range', min, max, value, step: 1 });
-  inp.addEventListener('input', () => { out.textContent = inp.value; onInput(+inp.value); });
+  const inp = h('input', { type: 'range', min, max, value, step });
+  inp.addEventListener('input', () => { out.textContent = inp.value; if (onInput) onInput(+inp.value); });
+  if (onChange) inp.addEventListener('change', () => onChange(+inp.value));
   return h('label', { class: 'slider' }, h('span', { class: 'sl-l' }, label), inp, out);
 }
 
 const actBtn = (ic, label, fn, cls = '') => h('button', { class: 'chip ' + cls, type: 'button', onClick: fn }, h('span', { html: icon(ic) }), h('span', {}, label));
+const txtChip = (label, on, fn, style = '') => h('button', { class: 'chip' + (on ? ' on' : ''), type: 'button', style, onClick: fn }, label);
+const svgChip = (svg, label, on, fn) => h('button', { class: 'chip sq' + (on ? ' on' : ''), type: 'button', 'aria-label': label, title: label, onClick: fn, html: svg });
+
+const DASH_SVG = [
+  '<svg viewBox="0 0 40 12"><line x1="3" y1="6" x2="37" y2="6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
+  '<svg viewBox="0 0 40 12"><line x1="3" y1="6" x2="37" y2="6" stroke="currentColor" stroke-width="2.4" stroke-dasharray="7 5" stroke-linecap="butt"/></svg>',
+  '<svg viewBox="0 0 40 12"><line x1="4" y1="6" x2="36" y2="6" stroke="currentColor" stroke-width="2.6" stroke-dasharray="0.1 6" stroke-linecap="round"/></svg>',
+];
+const HEAD_SVG = {
+  v: '<svg viewBox="0 0 40 12"><path d="M3 6h32M29 1l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  tri: '<svg viewBox="0 0 40 12"><path d="M3 6h24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M27 1l10 5-10 5z" fill="currentColor"/></svg>',
+  both: '<svg viewBox="0 0 40 12"><path d="M5 6h30M11 1L5 6l6 5M29 1l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+function penPreview(name) {
+  const P = V.pens[name];
+  const c = h('canvas', { class: 'penprev' });
+  const W = 84, H = 30, k = 2;
+  c.width = W * k; c.height = H * k;
+  const ctx = c.getContext('2d');
+  ctx.scale(k, k);
+  const pts = [];
+  for (let i = 0; i <= 24; i++) {
+    const x = 6 + i * (W - 12) / 24;
+    const y = H / 2 + Math.sin(i / 24 * Math.PI * 2) * 6;
+    pts.push(P.vary ? [x, y, 0.45 + 1.0 * Math.sin(i / 24 * Math.PI) ** 1.3] : [x, y]);
+  }
+  const col = colorFor('ink');
+  drawEdit(ctx, { t: 'ink', pts, color: col, w: Math.min(P.w, 13), op: P.op, cap: P.cap, vary: P.vary });
+  return c;
+}
+
+function penRows(bar) {
+  const names = PEN_NAMES();
+  const pens = h('div', { class: 'orow pens' });
+  for (const k of Object.keys(V.pens)) {
+    pens.append(h('button', { class: 'pen' + (V.pen === k ? ' on' : ''), type: 'button', onClick: () => { V.pen = k; buildOpt(); } }, penPreview(k), h('span', {}, names[k])));
+  }
+  bar.append(pens);
+}
+
+function lineStyleChips(cur, on) {
+  return h('div', { class: 'chips' }, [t('Solid'), t('Dashed'), t('Dotted')].map((l, i) => svgChip(DASH_SVG[i], l, (cur || 0) === i, () => on(i))));
+}
+
+function fontChips(cur, bold, onFont, onBold) {
+  return h('div', { class: 'chips' },
+    txtChip('Sans', cur === 'sans', () => onFont('sans'), 'font-family:system-ui,sans-serif'),
+    txtChip('Serif', cur === 'serif', () => onFont('serif'), 'font-family:Georgia,serif'),
+    txtChip('Mono', cur === 'mono', () => onFont('mono'), 'font-family:monospace'),
+    txtChip('B', !!bold, onBold, 'font-weight:800'));
+}
 
 function buildOpt() {
   const bar = $('#optbar');
@@ -337,32 +401,79 @@ function buildOpt() {
   let show = false;
   if (tool === 'select') {
     const e = selectedEdit();
+    show = true;
     if (e) {
-      show = true;
-      if (e.t !== 'img' && e.t !== 'redact' && e.color) bar.append(swatches(e.color, (c) => replaceEdit(V.sel.page, V.sel.idx, { ...e, color: c })));
-      if (e.t === 'text') bar.append(actBtn('edittext', t('Edit'), editSelectedText));
-      bar.append(actBtn('trash', t('Delete'), () => { const s = V.sel; clearSelection(); removeEdit(s.page, s.idx); }, 'danger'));
+      const page = V.sel.page, idx = V.sel.idx;
+      const patch = (o) => {
+        const ne = { ...e, ...o };
+        if (ne.t === 'text') ne.y1 = ne.y0 + layoutText(ne).height;
+        replaceEdit(page, idx, ne);
+      };
+      const isInk = e.t === 'ink', isShape = ['rect', 'ellipse', 'line', 'arrow'].includes(e.t);
+      if (e.t !== 'img' && e.t !== 'redact' && e.color) bar.append(row(swatches(e.color, (c) => patch({ color: c }))));
+      if (isInk || isShape) {
+        const r = row();
+        if (!(isInk && e.vary)) r.append(lineStyleChips(e.dash, (d) => patch({ dash: d })));
+        r.append(slider(t('Width'), 0.5, 30, e.w, null, (v) => patch({ w: v }), 0.5));
+        if (!(isInk && e.vary)) r.append(slider(t('Opacity'), 10, 100, Math.round((e.op ?? 1) * 100), null, (v) => patch({ op: v / 100 })));
+        bar.append(r);
+      }
+      if (e.t === 'text') {
+        bar.append(row(fontChips(e.font || 'sans', e.bold, (f) => patch({ font: f }), () => patch({ bold: !e.bold })),
+          slider(t('Size'), 6, 72, e.size, null, (v) => patch({ size: v }))));
+      }
+      const acts = row();
+      if (e.t === 'text') acts.append(actBtn('edittext', t('Edit'), editSelectedText));
+      acts.append(actBtn('trash', t('Delete'), () => { const s = V.sel; clearSelection(); removeEdit(s.page, s.idx); }, 'danger'));
+      bar.append(acts);
     } else if (V.tsel) {
-      show = true;
-      bar.append(actBtn('copy', t('Copy'), async () => { await copyText(selectedText()); clearSelection(); }),
+      bar.append(row(actBtn('copy', t('Copy'), async () => { await copyText(selectedText()); clearSelection(); }),
         actBtn('highlight', t('Highlight'), () => applyMarkup('hl')),
         actBtn('underline', t('Underline'), () => applyMarkup('ul')),
-        actBtn('strike', t('Strikeout'), () => applyMarkup('st')));
-    } else { show = true; bar.append(h('div', { class: 'hint' }, t('Tap an item to select it · long-press text to select'))); }
-  } else if (COLOR_TOOLS.has(tool)) {
+        actBtn('strike', t('Strikeout'), () => applyMarkup('st'))));
+    } else bar.append(row(h('div', { class: 'hint' }, t('Tap an item to select it · long-press text to select'))));
+  } else if (tool === 'ink') {
     show = true;
-    bar.append(swatches(colorFor(tool), (c) => { setColor(c, tool); buildOpt(); }));
-    if (WIDTH_TOOLS.has(tool)) bar.append(slider(t('Width'), 1, 14, V.width, (v) => { V.width = v; }));
-    if (tool === 'text') bar.append(slider(t('Size'), 8, 56, V.size, (v) => { V.size = v; }));
+    penRows(bar);
+    const P = V.pens[V.pen];
+    bar.append(row(swatches(colorFor('ink'), (c) => { setColor(c, 'ink'); buildOpt(); })));
+    const r = row();
+    if (!P.vary) r.append(lineStyleChips(V.dash, (d) => { V.dash = d; buildOpt(); }));
+    r.append(slider(t('Width'), 0.5, 40, P.w, (v) => { P.w = v; }, () => buildOpt(), 0.5));
+    if (!P.vary) r.append(slider(t('Opacity'), 10, 100, Math.round(P.op * 100), (v) => { P.op = v / 100; }, () => buildOpt()));
+    bar.append(r);
+  } else if (SHAPE_TOOLS.has(tool)) {
+    show = true;
+    const top = row(lineStyleChips(V.dash, (d) => { V.dash = d; buildOpt(); }));
+    if (tool === 'rect' || tool === 'ellipse') top.append(txtChip(t('Fill'), V.fill, () => { V.fill = !V.fill; buildOpt(); }));
+    if (tool === 'arrow') {
+      top.append(h('div', { class: 'chips' }, ['v', 'tri', 'both'].map((k) => svgChip(HEAD_SVG[k], k, V.head === k, () => { V.head = k; buildOpt(); }))));
+    }
+    bar.append(top, row(swatches(colorFor(tool), (c) => { setColor(c, tool); buildOpt(); })),
+      row(slider(t('Width'), 0.5, 30, V.shape.w, (v) => { V.shape.w = v; }, null, 0.5), slider(t('Opacity'), 10, 100, Math.round(V.shape.op * 100), (v) => { V.shape.op = v / 100; })));
+  } else if (tool === 'text' || tool === 'note') {
+    show = true;
+    if (tool === 'text') bar.append(row(fontChips(V.font, V.bold, (f) => { V.font = f; buildOpt(); }, () => { V.bold = !V.bold; buildOpt(); }), slider(t('Size'), 6, 72, V.size, (v) => { V.size = v; })));
+    bar.append(row(swatches(colorFor(tool), (c) => { setColor(c, tool); buildOpt(); })));
+  } else if (tool === 'stamp') {
+    show = true;
+    const kinds = [['check', '✓'], ['cross', '✕'], ['star', '★'], ['heart', '♥'], ['circle', '○'], ['dot', '●']];
+    bar.append(row(h('div', { class: 'chips' }, kinds.map(([k, g]) => txtChip(g, V.stamp === k, () => { V.stamp = k; buildOpt(); }, 'font-size:19px'))),
+      slider(t('Size'), 12, 120, V.stampSize, (v) => { V.stampSize = v; })),
+    row(swatches(colorFor('stamp'), (c) => { setColor(c, 'stamp'); buildOpt(); })));
+  } else if (['hl', 'ul', 'st'].includes(tool)) {
+    show = true;
+    bar.append(row(swatches(colorFor(tool), (c) => { setColor(c, tool); buildOpt(); })));
   } else {
     const hints = {
       hand: t('Drag to scroll · pinch to zoom · double-tap to fit'),
       edit: t('Tap on existing text to change it'),
       redact: t('Drag over what you want to hide permanently'),
+      erase: t('Drag over drawings to erase them'),
       img: t('Tap on the page where the image goes'),
       sig: t('Tap on the page where the signature goes'),
     };
-    if (hints[tool]) { show = true; bar.append(h('div', { class: 'hint' }, hints[tool])); }
+    if (hints[tool]) { show = true; bar.append(row(h('div', { class: 'hint' }, hints[tool]))); }
   }
   bar.classList.toggle('show', show && hasDoc());
 }
@@ -650,6 +761,9 @@ function init() {
     history.pushState({}, '');
     window.addEventListener('popstate', () => { if (backStack.length) { goBack(); history.pushState({}, ''); } });
   }
+  const fl = $('#floaters'), tb = $('#toolbar'), ob = $('#optbar');
+  const place = () => { const b = (ob.classList.contains('show') ? ob.offsetHeight : 0) + tb.offsetHeight + 12; fl.style.bottom = b + 'px'; $('#layer').style.setProperty('--tb', b + 'px'); };
+  new ResizeObserver(place).observe(ob); new ResizeObserver(place).observe(tb);
   window.__pdf = { S, V, R, ops, openBytes, flush, exportPdf };
 }
 

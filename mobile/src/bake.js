@@ -1,6 +1,6 @@
 // Bakes pending edits into the PDF bytes with pdf-lib.
 import { PDFDocument, StandardFonts, rgb, degrees, BlendMode, LineCapStyle } from '@cantoo/pdf-lib';
-import { layoutText, drawTextBlock, norm, PAD } from './draw.js';
+import { layoutText, drawTextBlock, norm, PAD, dashOf, arrowHeads } from './draw.js';
 
 const LATIN = /^[\x20-\x7e\xa0-\xff\r\n\t]*$/;
 
@@ -41,7 +41,7 @@ async function textPng(e, scale = 3) {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-async function drawOne(doc, page, M, helv, e, cache) {
+async function drawOne(doc, page, M, getFont, e, cache) {
   switch (e.t) {
     case 'hl':
       for (const r of e.rects) {
@@ -56,19 +56,38 @@ async function drawOne(doc, page, M, helv, e, cache) {
       }
       break;
     case 'ink': {
-      const p = e.pts.map(([x, y]) => M.pt(x, y));
-      const base = { thickness: e.w, color: hex(e.color), lineCap: LineCapStyle.Round, opacity: e.op ?? 1 };
-      if (p.length === 1) p.push([p[0][0] + 0.01, p[0][1]]);
-      for (let i = 1; i < p.length; i++) {
-        page.drawLine({ start: { x: p[i - 1][0], y: p[i - 1][1] }, end: { x: p[i][0], y: p[i][1] }, ...base });
+      const p = e.pts.map((q) => [...M.pt(q[0], q[1]), q[2] ?? 1]);
+      if (e.vary && p.length > 1) {
+        for (let i = 1; i < p.length; i++) {
+          page.drawLine({ start: { x: p[i - 1][0], y: p[i - 1][1] }, end: { x: p[i][0], y: p[i][1] }, thickness: e.w * (p[i - 1][2] + p[i][2]) / 2, color: hex(e.color), lineCap: LineCapStyle.Round });
+        }
+        break;
       }
+      if (e.vary) { page.drawLine({ start: { x: p[0][0], y: p[0][1] }, end: { x: p[0][0] + 0.01, y: p[0][1] }, thickness: e.w * p[0][2], color: hex(e.color), lineCap: LineCapStyle.Round }); break; }
+      // single smooth path (y is negated because drawSvgPath flips the y axis)
+      let d = `M ${p[0][0].toFixed(2)} ${(-p[0][1]).toFixed(2)}`;
+      if (p.length === 1) d += ` L ${(p[0][0] + 0.01).toFixed(2)} ${(-p[0][1]).toFixed(2)}`;
+      else if (e.raw) for (let i = 1; i < p.length; i++) d += ` L ${p[i][0].toFixed(2)} ${(-p[i][1]).toFixed(2)}`;
+      else {
+        for (let i = 1; i < p.length - 1; i++) {
+          d += ` Q ${p[i][0].toFixed(2)} ${(-p[i][1]).toFixed(2)} ${((p[i][0] + p[i + 1][0]) / 2).toFixed(2)} ${(-(p[i][1] + p[i + 1][1]) / 2).toFixed(2)}`;
+        }
+        d += ` L ${p[p.length - 1][0].toFixed(2)} ${(-p[p.length - 1][1]).toFixed(2)}`;
+      }
+      const op = e.op ?? 1;
+      const o = { x: 0, y: 0, scale: 1, borderColor: hex(e.color), borderWidth: e.w, borderOpacity: op,
+        borderLineCap: e.cap === 'square' ? LineCapStyle.Projecting : (e.cap === 'butt' ? LineCapStyle.Butt : LineCapStyle.Round) };
+      const dash = dashOf(e); if (dash) o.borderDashArray = dash;
+      if (op < 1 && e.w >= 8) o.blendMode = BlendMode.Multiply;
+      page.drawSvgPath(d, o);
       break;
     }
     case 'rect': {
       const b = norm(e);
       const opt = rectIn(M, b.x0, b.y0, b.x1, b.y1);
       if (e.fill) opt.color = hex(e.fill);
-      if (e.w > 0) { opt.borderColor = hex(e.color); opt.borderWidth = e.w; } else opt.borderWidth = 0;
+      if (e.w > 0) { opt.borderColor = hex(e.color); opt.borderWidth = e.w; const d = dashOf(e); if (d) opt.borderDashArray = d; } else opt.borderWidth = 0;
+      opt.opacity = e.op ?? 1; opt.borderOpacity = e.op ?? 1;
       page.drawRectangle(opt);
       break;
     }
@@ -77,20 +96,24 @@ async function drawOne(doc, page, M, helv, e, cache) {
       const r = rectIn(M, b.x0, b.y0, b.x1, b.y1);
       const opt = { x: r.x + r.width / 2, y: r.y + r.height / 2, xScale: r.width / 2, yScale: r.height / 2 };
       if (e.fill) opt.color = hex(e.fill);
-      if (e.w > 0) { opt.borderColor = hex(e.color); opt.borderWidth = e.w; } else opt.borderWidth = 0;
+      if (e.w > 0) { opt.borderColor = hex(e.color); opt.borderWidth = e.w; const d = dashOf(e); if (d) opt.borderDashArray = d; } else opt.borderWidth = 0;
+      opt.opacity = e.op ?? 1; opt.borderOpacity = e.op ?? 1;
       page.drawEllipse(opt);
       break;
     }
     case 'line': case 'arrow': {
       const a = M.pt(e.x0, e.y0), b = M.pt(e.x1, e.y1);
-      const base = { thickness: e.w, color: hex(e.color), lineCap: LineCapStyle.Round };
-      page.drawLine({ start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] }, ...base });
-      if (e.t === 'arrow') {
-        const ang = Math.atan2(e.y1 - e.y0, e.x1 - e.x0);
-        const len = Math.max(9, e.w * 4.5);
-        for (const s of [-1, 1]) {
-          const h = M.pt(e.x1 - len * Math.cos(ang + s * 0.45), e.y1 - len * Math.sin(ang + s * 0.45));
-          page.drawLine({ start: { x: b[0], y: b[1] }, end: { x: h[0], y: h[1] }, ...base });
+      const op = e.op ?? 1;
+      const base = { thickness: e.w, color: hex(e.color), lineCap: LineCapStyle.Round, opacity: op };
+      const d = dashOf(e);
+      page.drawLine({ start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] }, ...base, ...(d ? { dashArray: d } : {}) });
+      for (const hd of arrowHeads(e)) {
+        const T = M.pt(hd.tip[0], hd.tip[1]), A = M.pt(hd.a[0], hd.a[1]), B = M.pt(hd.b[0], hd.b[1]);
+        if (hd.tri) {
+          page.drawSvgPath(`M ${T[0].toFixed(2)} ${(-T[1]).toFixed(2)} L ${A[0].toFixed(2)} ${(-A[1]).toFixed(2)} L ${B[0].toFixed(2)} ${(-B[1]).toFixed(2)} Z`, { x: 0, y: 0, scale: 1, color: hex(e.color), opacity: op });
+        } else {
+          page.drawLine({ start: { x: T[0], y: T[1] }, end: { x: A[0], y: A[1] }, ...base });
+          page.drawLine({ start: { x: T[0], y: T[1] }, end: { x: B[0], y: B[1] }, ...base });
         }
       }
       break;
@@ -99,10 +122,11 @@ async function drawOne(doc, page, M, helv, e, cache) {
       if (LATIN.test(e.text)) {
         if (e.bg) page.drawRectangle({ ...rectIn(M, e.x0, e.y0, e.x1, e.y1), color: hex(e.bg), borderWidth: 0 });
         const { lines } = layoutText(e);
+        const fnt = await getFont(e);
         lines.forEach((ln, i) => {
           if (!ln) return;
           const A = M.pt(e.x0 + PAD, e.y0 + PAD + e.size + i * e.size * 1.3);
-          page.drawText(ln.replace(/\t/g, ' '), { x: A[0], y: A[1], size: e.size, font: helv, color: hex(e.color), rotate: degrees(M.R) });
+          page.drawText(ln.replace(/\t/g, ' '), { x: A[0], y: A[1], size: e.size, font: fnt, color: hex(e.color), rotate: degrees(M.R) });
         });
       } else {
         // Arabic / other scripts: shaped by the browser, embedded as a transparent PNG
@@ -132,7 +156,13 @@ export async function bake(bytes, edits, { rasterize } = {}) {
   const pagesWith = Object.keys(edits).map(Number).filter((i) => (edits[i] || []).length);
   if (!pagesWith.length) return bytes;
   const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const fonts = new Map();
+  const getFont = async (e) => {
+    const fam = e.font === 'serif' ? 'Times' : (e.font === 'mono' ? 'Courier' : 'Helvetica');
+    const key = e.bold ? (fam === 'Times' ? 'TimesRomanBold' : fam + 'Bold') : (fam === 'Times' ? 'TimesRoman' : fam);
+    if (!fonts.has(key)) fonts.set(key, await doc.embedFont(StandardFonts[key]));
+    return fonts.get(key);
+  };
   const cache = new Map();
   const redactions = new Map();
   for (const i of pagesWith) {
@@ -144,7 +174,7 @@ export async function bake(bytes, edits, { rasterize } = {}) {
         redactions.get(i).push(norm(e));
         continue;
       }
-      await drawOne(doc, page, M, helv, e, cache);
+      await drawOne(doc, page, M, getFont, e, cache);
     }
   }
   let out = new Uint8Array(await doc.save());

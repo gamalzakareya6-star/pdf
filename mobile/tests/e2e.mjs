@@ -158,6 +158,52 @@ try {
   await page.click('[data-tool=hand]');
   await shot('06-edited');
 
+  // pens, line styles, fills, stamps, eraser
+  await page.click('[data-tool=ink]');
+  await shot('06b-pens-ui');
+  const penRuns = [['Fountain', 560], ['Brush', 585], ['Marker', 610], ['Highlighter', 640], ['Pencil', 670]];
+  for (const [name, y] of penRuns) {
+    await page.click(`.pen:has-text("${name}")`);
+    const a = await at(80, y), b = await at(300, y + 14);
+    await page.mouse.move(...a); await page.mouse.down();
+    await page.mouse.move(a[0] + 60, a[1] - 10, { steps: 5 }); await page.mouse.move(a[0] + 140, a[1] + 14, { steps: 5 }); await page.mouse.move(...b, { steps: 5 });
+    await page.mouse.up();
+  }
+  e = await edits();
+  const pensUsed = new Set((e[0] || []).filter((x) => x.t === 'ink').map((x) => x.pen));
+  ok('all pen presets recorded', ['fountain', 'brush', 'marker', 'highlighter', 'pencil'].every((k) => pensUsed.has(k)), [...pensUsed].join(','));
+  ok('variable-width points', (e[0] || []).some((x) => x.pen === 'fountain' && x.pts.length > 3 && x.pts[2].length === 3));
+
+  await page.click('[data-tool=line]');
+  await page.click('.chip.sq[aria-label=Dashed]');
+  await drag(await at(80, 700), await at(300, 700));
+  await page.click('[data-tool=arrow]');
+  await page.click('.chip.sq[aria-label=tri]');
+  await drag(await at(80, 740), await at(300, 770));
+  await page.click('[data-tool=ellipse]');
+  await page.click('.chip.sq[aria-label=Solid]');
+  await page.click('.chip:has-text("Fill")');
+  await drag(await at(350, 580), await at(470, 650));
+  await page.click('[data-tool=stamp]');
+  await shot('06c-stamp-ui');
+  await page.click('.chip:has-text("★")');
+  await page.mouse.click(...(await at(400, 740)));
+  e = await edits();
+  ok('dashed line', (e[0] || []).some((x) => x.t === 'line' && x.dash === 1));
+  ok('triangle arrow head', (e[0] || []).some((x) => x.t === 'arrow' && x.head === 'tri'));
+  ok('filled ellipse', (e[0] || []).some((x) => x.t === 'ellipse' && x.fill));
+  ok('star stamp', (e[0] || []).some((x) => x.t === 'ink' && x.raw && x.pts.length === 11));
+  await shot('06d-more-annotations');
+
+  const before = (await edits())[0].length;
+  await page.click('[data-tool=erase]');
+  await drag(await at(80, 560), await at(300, 574));
+  const after = (await edits())[0].length;
+  ok('eraser removes a stroke', after < before, `${before} -> ${after}`);
+  await page.click('.u-undo');
+  ok('undo restores erased stroke', (await edits())[0].length === before);
+  await page.click('[data-tool=hand]');
+
   // search
   await page.click('button[aria-label=Search]');
   await page.fill('#q', 'invoice');
@@ -202,6 +248,11 @@ try {
   await page.waitForTimeout(800);
   await shot('10-exported-reopened');
   const words = await page.evaluate(async () => (await window.__pdf.R.getWords(0)).map((w) => w.s));
+  const painted = await page.evaluate(() => {
+    const c = document.querySelector('.page.ready canvas.pdf'); const k = c.height / 842; const d = c.getContext('2d').getImageData(0, Math.floor(555 * k), c.width, Math.floor(230 * k)).data;
+    let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235) n++; return n;
+  });
+  ok('baked pens/shapes visible in exported pdf', painted > 1500, String(painted));
   ok('redacted text is gone from file', !words.includes('ZEBRA') && !words.includes('Confidential'), words.join(' ').slice(0, 80));
 
   // encryption roundtrip

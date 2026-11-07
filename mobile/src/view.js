@@ -1,13 +1,13 @@
 // The document canvas: continuous scrolling pages, zoom, touch gestures and all editing tools.
-import { S, addEdit, addEdits, replaceEdit } from './state.js';
+import { S, addEdit, addEdits, replaceEdit, commitEdits } from './state.js';
 import * as R from './render.js';
-import { drawEdit, bboxOf, hitTest, translateEdit, RECT_LIKE, layoutText, PAD, norm, setImageLoadHandler } from './draw.js';
+import { drawEdit, bboxOf, hitTest, translateEdit, RECT_LIKE, layoutText, PAD, norm, setImageLoadHandler, PENS, FONTS, stampShapes } from './draw.js';
 import { askText, toast, h } from './ui.js';
 import { t } from './i18n.js';
 
-export const COLORS = ['#ffd60a', '#34c759', '#ff6bb5', '#4f9dff', '#ff9f0a', '#ff3b30', '#1c1c1e', '#ffffff'];
-const DEFAULT_COLORS = { hl: '#ffd60a', ul: '#2f6bff', st: '#ff3b30', draw: '#ff3b30', text: '#1c1c1e', note: '#1c1c1e' };
-const LOCK_TOOLS = new Set(['hl', 'ul', 'st', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'redact']);
+export const COLORS = ['#1c1c1e', '#ff3b30', '#ff9f0a', '#ffd60a', '#34c759', '#00c7be', '#4f9dff', '#2f4bff', '#af52de', '#ff6bb5', '#8e5a3c', '#8e8e93', '#ffffff'];
+const DEFAULT_COLORS = { hl: '#ffd60a', ul: '#2f6bff', st: '#ff3b30', draw: '#2f4bff', text: '#1c1c1e', note: '#1c1c1e', stamp: '#e5484d' };
+const LOCK_TOOLS = new Set(['hl', 'ul', 'st', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'redact', 'erase']);
 const SHAPES = new Set(['rect', 'ellipse', 'line', 'arrow', 'redact']);
 const MARGIN = 10;
 const GAP = 12;
@@ -15,7 +15,10 @@ const MIN_Z = 0.2, MAX_Z = 6;
 
 export const V = {
   zoom: 1, fit: true, tool: 'hand', page: 0,
-  colors: { ...DEFAULT_COLORS }, width: 3, size: 16,
+  colors: { ...DEFAULT_COLORS }, size: 16, font: 'sans', bold: false,
+  pen: 'ballpoint', pens: JSON.parse(JSON.stringify(PENS)),
+  shape: { w: 3, op: 1 }, dash: 0, fill: false, head: 'v', stamp: 'check', stampSize: 34,
+  erasing: null,
   sel: null,            // selected edit {page, idx}
   tsel: null,           // selected text {page, a, b}
   draft: null, preview: null,
@@ -28,7 +31,7 @@ const emit = (name, ...a) => { if (V.on[name]) V.on[name](...a); };
 
 export const colorFor = (tool = V.tool) => V.colors[tool === 'ink' ? 'draw' : (SHAPES.has(tool) ? 'draw' : tool)] || V.colors.draw;
 export function setColor(c, tool = V.tool) {
-  const k = ['hl', 'ul', 'st', 'text', 'note'].includes(tool) ? tool : 'draw';
+  const k = ['hl', 'ul', 'st', 'text', 'note', 'stamp'].includes(tool) ? tool : 'draw';
   V.colors[k] = c;
 }
 
@@ -173,6 +176,7 @@ export function redraw(i) {
   }
   const list = S.edits[i] || [];
   list.forEach((e, idx) => {
+    if (V.erasing && V.erasing.page === i && V.erasing.set.has(idx)) return;
     const eff = V.preview && V.preview.page === i && V.preview.idx === idx ? V.preview.edit : e;
     drawEdit(ctx, eff);
   });
@@ -367,7 +371,7 @@ export function applyMarkup(kind) {
 function cancelDown() {
   if (down) { clearTimeout(down.timer); }
   down = null;
-  if (V.draft || V.preview) { V.draft = null; V.preview = null; redrawAll(); }
+  if (V.draft || V.preview || V.erasing) { V.draft = null; V.preview = null; V.erasing = null; redrawAll(); }
 }
 
 function onDown(e) {
@@ -426,16 +430,41 @@ function onDown(e) {
     return;
   }
   const q = clampPt(p, i);
+  if (tool === 'erase') {
+    capture(e); down.mode = 'erase';
+    V.erasing = { page: i, set: new Set() };
+    eraseAt(i, p);
+    return;
+  }
   if (tool === 'ink') {
     capture(e); down.mode = 'draw';
-    V.draft = { page: i, edit: { t: 'ink', pts: [q], color: colorFor('ink'), w: V.width, op: 1 } };
+    const P = V.pens[V.pen];
+    down.lx = e.clientX; down.ly = e.clientY; down.lt = e.timeStamp; down.lf = 1;
+    const first = P.vary ? [q[0], q[1], 1] : [q[0], q[1]];
+    V.draft = { page: i, edit: { t: 'ink', pts: [first], color: colorFor('ink'), w: P.w, op: P.op, cap: P.cap, vary: P.vary, dash: P.vary ? 0 : V.dash, pen: V.pen } };
     redraw(i);
     return;
   }
   if (SHAPES.has(tool)) {
     capture(e); down.mode = 'shape';
-    V.draft = { page: i, edit: { t: tool, x0: q[0], y0: q[1], x1: q[0], y1: q[1], color: colorFor(tool), w: tool === 'redact' ? 0 : V.width } };
+    const ed = { t: tool, x0: q[0], y0: q[1], x1: q[0], y1: q[1], color: colorFor(tool), w: tool === 'redact' ? 0 : V.shape.w };
+    if (tool !== 'redact') {
+      ed.op = V.shape.op; ed.dash = V.dash;
+      if ((tool === 'rect' || tool === 'ellipse') && V.fill) ed.fill = ed.color;
+      if (tool === 'arrow') ed.head = V.head;
+    }
+    V.draft = { page: i, edit: ed };
   }
+}
+
+function eraseAt(i, p) {
+  const list = S.edits[i] || [];
+  const tol = 7 / V.zoom;
+  let changed = false;
+  list.forEach((e, k) => {
+    if (!V.erasing.set.has(k) && hitTest([e], p[0], p[1], tol) === 0) { V.erasing.set.add(k); changed = true; }
+  });
+  if (changed) redraw(i);
 }
 
 function onMove(e) {
@@ -469,9 +498,24 @@ function onMove(e) {
     }
     case 'draw': {
       const q = clampPt(p, i), pts = V.draft.edit.pts, l = pts[pts.length - 1];
-      if (Math.hypot(q[0] - l[0], q[1] - l[1]) * V.zoom >= 1.5) { pts.push(q); redraw(i); }
+      if (Math.hypot(q[0] - l[0], q[1] - l[1]) * V.zoom >= 1.5) {
+        if (V.draft.edit.vary) {
+          const lo = V.draft.edit.vary === 2 ? 0.3 : 0.5, hi = V.draft.edit.vary === 2 ? 1.6 : 1.4;
+          let f;
+          if (e.pointerType === 'pen' && e.pressure > 0) f = 0.35 + e.pressure * 1.25;
+          else {
+            const dt = Math.max(1, e.timeStamp - down.lt), v = Math.hypot(e.clientX - down.lx, e.clientY - down.ly) / dt;
+            f = 1.45 - v * 0.9;
+          }
+          f = clamp(down.lf * 0.6 + clamp(f, lo, hi) * 0.4, lo, hi);
+          down.lf = f; down.lx = e.clientX; down.ly = e.clientY; down.lt = e.timeStamp;
+          pts.push([q[0], q[1], f]);
+        } else pts.push(q);
+        redraw(i);
+      }
       break;
     }
+    case 'erase': eraseAt(i, p); break;
     case 'shape': {
       const q = clampPt(p, i);
       V.draft.edit.x1 = q[0]; V.draft.edit.y1 = q[1]; redraw(i); break;
@@ -505,6 +549,12 @@ function onUp(e) {
       if (ed) addEdit(i, ed);
       return;
     }
+    case 'erase': {
+      const er = V.erasing; V.erasing = null;
+      if (er && er.set.size) commitEdits({ ...S.edits, [er.page]: (S.edits[er.page] || []).filter((_, k) => !er.set.has(k)) });
+      else redrawAll();
+      return;
+    }
     case 'shape': {
       const ed = V.draft && V.draft.edit; V.draft = null;
       if (ed && Math.hypot(ed.x1 - ed.x0, ed.y1 - ed.y0) * V.zoom > 8) addEdit(i, ed); else redraw(i);
@@ -516,7 +566,7 @@ function onUp(e) {
 }
 
 function onCancel(e) {
-  if (down && e.pointerId === down.id) { clearTimeout(down.timer); if (down.mode === 'draw' || down.mode === 'shape' || down.mode === 'move' || down.mode === 'resize') cancelDown(); else down = null; }
+  if (down && e.pointerId === down.id) { clearTimeout(down.timer); if (['draw', 'shape', 'move', 'resize', 'erase'].includes(down.mode)) cancelDown(); else down = null; }
 }
 
 function onTap(e, d) {
@@ -537,6 +587,7 @@ function onTap(e, d) {
     openEditor(i, p[0], p[1], w, null);
   } else if (tool === 'edit') editText(i, p);
   else if (tool === 'img' || tool === 'sig') placeImage(i, p);
+  else if (tool === 'stamp') placeStamp(i, p);
 }
 
 // ---- pinch zoom (touch) -----------------------------------------------------------------------------
@@ -565,7 +616,7 @@ function onTouchMove(e) {
     scroller.scrollTop = pinch.st - (c.y - pinch.c0.y);
     return;
   }
-  if (down && ['move', 'resize', 'tsel', 'draw', 'shape'].includes(down.mode)) e.preventDefault();
+  if (down && ['move', 'resize', 'tsel', 'draw', 'shape', 'erase'].includes(down.mode)) e.preventDefault();
 }
 function onTouchEnd(e) {
   if (pinch && e.touches.length < 2) {
@@ -589,7 +640,7 @@ function closeEditor(commit) {
     if (text.trim()) {
       const size = ed.edit ? ed.edit.size : (ed.note ? 13 : V.size);
       const color = ed.edit ? ed.edit.color : colorFor(ed.note ? 'note' : 'text');
-      const base = { t: 'text', x0: ed.x, y0: ed.y, x1: ed.x + ed.w, y1: ed.y + 20, text, size, color };
+      const base = { t: 'text', x0: ed.x, y0: ed.y, x1: ed.x + ed.w, y1: ed.y + 20, text, size, color, font: ed.edit ? ed.edit.font : V.font, bold: ed.edit ? !!ed.edit.bold : V.bold };
       if (ed.note || (ed.edit && ed.edit.bg)) base.bg = '#fff4a3';
       base.y1 = base.y0 + layoutText(base).height;
       if (ed.idx != null) replaceEdit(ed.page, ed.idx, base);
@@ -612,7 +663,8 @@ export function openEditor(page, x, y, w, existing, idx = null) {
   const ta = h('textarea', { class: 'texted', dir: 'auto', rows: 2, placeholder: t('Type here…') });
   ta.value = existing ? existing.text : '';
   const bg = (existing && existing.bg) || (note ? '#fff4a3' : 'rgba(255,255,255,.92)');
-  Object.assign(ta.style, { fontSize: size * V.zoom + 'px', color, background: bg, width: w * V.zoom + 'px', lineHeight: '1.3' });
+  Object.assign(ta.style, { fontSize: size * V.zoom + 'px', color, background: bg, width: w * V.zoom + 'px', lineHeight: '1.3',
+    fontFamily: FONTS[existing ? existing.font : V.font] || FONTS.sans, fontWeight: (existing ? existing.bold : V.bold) ? '700' : '400' });
   const ok = h('button', { class: 'tb ok', type: 'button', 'aria-label': t('OK'), onPointerdown: (ev) => ev.preventDefault(), onClick: () => closeEditor(true) }, '✓');
   const no = h('button', { class: 'tb no', type: 'button', 'aria-label': t('Cancel'), onPointerdown: (ev) => ev.preventDefault(), onClick: () => closeEditor(false) }, '✕');
   const bar = h('div', { class: 'tbar' }, ok, no);
@@ -651,6 +703,13 @@ async function editText(i, p) {
     items2.push(te);
   }
   addEdits(i, items2);
+}
+
+function placeStamp(i, p) {
+  const sz = V.stampSize;
+  const w = V.stamp === 'dot' ? sz * 0.8 : Math.max(2, sz * 0.13);
+  const list = stampShapes(V.stamp, p[0], p[1], sz).map((pts) => ({ t: 'ink', pts, color: colorFor('stamp'), w, op: 1, raw: true }));
+  addEdits(i, list);
 }
 
 function placeImage(i, p) {

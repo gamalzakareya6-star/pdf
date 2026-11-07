@@ -57,6 +57,8 @@ export const ICONS = {
  "arrow_down": "<line x1=\"12\" y1=\"5\" x2=\"12\" y2=\"19\"/><polyline points=\"19 12 12 19 5 12\"/>",
  "arrow_left": "<line x1=\"19\" y1=\"12\" x2=\"5\" y2=\"12\"/><polyline points=\"12 19 5 12 12 5\"/>",
  "arrow_right": "<line x1=\"5\" y1=\"12\" x2=\"19\" y2=\"12\"/><polyline points=\"12 5 19 12 12 19\"/>",
+ "eraser": "<path d=\"M7 21h10\"/><path d=\"M5.5 15.5l9-9a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L11 19H8l-2.5-2.5a1.4 1.4 0 0 1 0-1z\"/>",
+ "stamp": "<polygon points=\"12 2 15.1 8.6 22 9.3 16.8 14 18.2 21 12 17.5 5.8 21 7.2 14 2 9.3 8.9 8.6\"/>",
  "cursor_text": "<path d=\"M9 4h6\"/><path d=\"M9 20h6\"/><path d=\"M12 4v16\"/>"
 };
 
