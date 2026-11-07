@@ -183,8 +183,9 @@ export function drawEdit(ctx, e) {
       if (e.t === 'arrow') arrowHead(ctx, e.x0, e.y0, e.x1, e.y1, e.w);
       break;
     case 'hl':
-      ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = e.color;
+      ctx.globalAlpha = 0.4; ctx.fillStyle = e.color;
       for (const r of e.rects) ctx.fillRect(r[0], r[1], r[2] - r[0], r[3] - r[1]);
+      ctx.globalAlpha = 1;
       break;
     case 'ul': case 'st':
       ctx.strokeStyle = e.color; ctx.lineWidth = 1.3;
