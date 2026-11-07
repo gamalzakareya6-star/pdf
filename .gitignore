@@ -7,3 +7,10 @@ dist/
 *.spec
 .idea/
 .vscode/
+
+mobile/node_modules/
+mobile/android/
+mobile/dist/
+mobile/shots/
+mobile/*.log
+!mobile/signing/*.p12

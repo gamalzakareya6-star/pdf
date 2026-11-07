@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#4f6bed" />
+  <title>PDF Toolkit</title>
+</head>
+<body>
+  <div id="app" data-screen="start">
+    <section id="start"></section>
+    <section id="viewer">
+      <header id="topbar"></header>
+      <div id="searchbar"></div>
+      <main id="scroller"><div id="pages"></div></main>
+      <div id="floaters">
+        <button id="zout" type="button" aria-label="-">−</button>
+        <button id="pill" type="button"></button>
+        <button id="zin" type="button" aria-label="+">+</button>
+      </div>
+      <div id="optbar"></div>
+      <nav id="toolbar"></nav>
+    </section>
+    <div id="layer"></div>
+  </div>
+  <input id="file" type="file" accept="application/pdf" hidden />
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+name: Test and build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths: ["mobile/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["mobile/**"]
+  workflow_dispatch:
+
+jobs:
+  web-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fonts (Arabic + Latin) for screenshots
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-core fonts-noto-ui-core fonts-dejavu-core
+        working-directory: .
+      - run: npm install --no-audit --no-fund
+      - name: Build web app
+        run: npm run build 2>&1 | tee build.log; test ${PIPESTATUS[0]} -eq 0 || { node scripts/annotate.mjs error "vite build failed" build.log; exit 1; }
+      - run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        run: node tests/e2e.mjs 2>&1 | tee e2e.log; test ${PIPESTATUS[0]} -eq 0 || { node scripts/annotate.mjs error "e2e log tail" e2e.log; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-screenshots
+          path: mobile/shots
+          if-no-files-found: ignore
+      - name: Publish screenshots to the ci-screenshots-mobile branch
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: .
+        run: |
+          if [ -d mobile/shots ]; then
+            rm -f mobile/shots/export.pdf
+            git config user.name "ci"
+            git config user.email "ci@users.noreply.github.com"
+            git checkout -q --orphan ci-screenshots-mobile
+            git rm -rq --cached . || true
+            git add -f mobile/shots
+            git commit -q -m "mobile screenshots for $GITHUB_SHA"
+            git push -f origin ci-screenshots-mobile
+          fi
+
+  apk:
+    needs: web-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - name: Create Android project
+        run: |
+          npx cap add android
+          npx capacitor-assets generate --android --iconBackgroundColor '#4f6bed' --iconBackgroundColorDark '#4f6bed' --splashBackgroundColor '#f5f6fa' --splashBackgroundColorDark '#12141c' || true
+          node scripts/patch-android.mjs
+          npx cap sync android
+      - name: Build release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee ../gradle.log; test ${PIPESTATUS[0]} -eq 0 || { cd ..; node scripts/annotate.mjs error "gradle failed" gradle.log; exit 1; }
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n1)
+          echo "APK=$APK"
+          cp "$APK" out/PDFToolkit.apk
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFToolkit-android
+          path: mobile/out/PDFToolkit.apk
+      - name: Publish latest build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          target_commitish: ${{ github.sha }}
+          files: mobile/out/PDFToolkit.apk

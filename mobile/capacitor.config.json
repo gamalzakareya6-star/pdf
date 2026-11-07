@@ -1,0 +1,7 @@
+{
+  "appId": "com.gamalzakareya.pdftoolkit",
+  "appName": "PDF Toolkit",
+  "webDir": "dist",
+  "backgroundColor": "#f5f6fa",
+  "android": { "allowMixedContent": false }
+}
